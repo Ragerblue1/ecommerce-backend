@@ -7,9 +7,35 @@ const app = express();
 app.use(express.json())
 const mongoose = require('mongoose')
 const CheckValidId = require('../middleware/ValidId.js')
+const multer = require('multer')
+
+const FILE_TYPE_MAP = {
+    'image/png': 'png',
+    'image/jpeg': 'jpeg',
+    'image/jpg': 'jpg',
+}
+
+//uploading images using the multer
+let storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        const isValidFile = FILE_TYPE_MAP[file.mimetype];
+        let uploadError = new Error('invalid Image Type');
+        if (isValidFile) {
+            uploadError = null
+        }
+        cb(uploadError, 'public/uploads')
+    },
+    filename: function (req, file, cb) {
+        const filename = file.originalname.split(' ').join('-');
+        const extension = FILE_TYPE_MAP[file.mimetype]
+        cb(null, `${filename}-${Date.now()}.${extension}`)
+    }
+})
+
+const uploadOptions = multer({ storage: storage })
 
 //Adding Products
-router.post(`/`, async (req, res) => {
+router.post(`/`, uploadOptions.single('image'), async (req, res) => {
 
     const { name, image, price, countInStock, description, richDescrption, brand, category, rating, numReviews, isFeatured } = req.body;
     if (!name || countInStock === undefined || countInStock === null || isNaN(price) || price === null || price === undefined || price < 0) {
@@ -19,12 +45,19 @@ router.post(`/`, async (req, res) => {
         });
     }
 
-    try {
-        console.log("Raw Category from body:", `|${category}|`); 
-
-    if (!category) {
-        return res.status(400).json({ success: false, message: "Category ID is missing" });
+    const file = req.file;
+    if (!file) {
+        return res.status(400).json({
+            success: false,
+            message: "File is Required"
+        });
     }
+    try {
+        console.log("Raw Category from body:", `|${category}|`);
+
+        if (!category) {
+            return res.status(400).json({ success: false, message: "Category ID is missing" });
+        }
         const FindCategory = await Category.findById(category.trim())
         if (!FindCategory) {
             return res.status(400).json({
@@ -32,9 +65,11 @@ router.post(`/`, async (req, res) => {
                 message: "Inavlid Category"
             });
         }
-        const product = new Product({
+        const fileName = req.file.filename
+        const basePath = `${req.protocol}://${req.get('host')}/public/uploads/`
+        let product = new Product({
             name,
-            image,
+            image: `${basePath}${fileName}`,//"http://localhost:8080/public/uploads/image-2345678",
             price,
             countInStock,
             description, richDescrption, brand, category, rating, numReviews, isFeatured
@@ -206,7 +241,7 @@ router.get('/get/search', async (req, res) => {
             {
                 $match: {
 
-                    $or:orConditions
+                    $or: orConditions
                 }
             },
             {
@@ -233,5 +268,36 @@ router.get('/get/search', async (req, res) => {
         return res.status(500).json({ success: false, message: "SERVER ERROR:-" + error.message })
     }
 })
+
+//uploading multiple images
+router.patch('/gallery-images/:id', CheckValidId
+    , uploadOptions.array('images', 20)
+    , async (req, res) => {
+        const { id } = req.params
+        try {
+            const files = req.files
+            const basePath = `${req.protocol}://${req.get('host')}/public/uploads/`
+            let imagesPaths=[]
+            if (files) {
+                files.map(file => {
+                    imagesPaths.push(`${basePath}${file.filename}`)
+                })
+
+            }
+            const productImages = await Product.findByIdAndUpdate(
+                id,
+                {
+                    images: imagesPaths
+                },
+                { new: true },
+            )
+            if (!productImages) {
+                return res.status(404).json({ success: false, message: "Product Images Cannot be Updated" })
+            }
+            return res.status(200).json({ success: true, data: productImages })
+        } catch (error) {
+            return res.status(500).json({ success: false, message: "Server Error:-" + error.message })
+        }
+    })
 
 module.exports = router;
